@@ -65,6 +65,7 @@ async def _post_transcript(state: CallState, speaker: str, text: str):
     payload = {
         "sip_call_id": state.sip_call_id or "",
         "room_name":   state.room_name,
+        "phone":       state.phone_number,   # ← primary key for matching
         "speaker":     speaker,
         "text":        text,
         "timestamp":   datetime.now(timezone.utc).isoformat(),

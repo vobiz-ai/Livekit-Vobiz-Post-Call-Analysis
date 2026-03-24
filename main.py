@@ -62,14 +62,19 @@ RECORDING_RETRIES          = int(os.getenv("RECORDING_RETRIES", "3"))
 RECORDING_RETRY_DELAY_SECS = int(os.getenv("RECORDING_RETRY_DELAY_SECS", "5"))
 
 # ---------------------------------------------------------------------------
-# In-memory stores (agent.py POSTs to /internal/transcript)
+# In-memory stores
 # ---------------------------------------------------------------------------
-# call_uuid → { sip_call_id, room_name, lines: [{speaker, text, timestamp}] }
-call_store:       dict[str, dict] = {}
-# sip_call_id → call_uuid  (for cross-referencing)
-sip_to_uuid:      dict[str, str]  = {}
-# room_name → call_uuid
-room_to_uuid:     dict[str, str]  = {}
+# Primary store: phone_number → { lines, room_name, sip_call_id, ... }
+# Phone number is the ONLY field that is consistent across:
+#   - agent.py (room name contains phone)
+#   - Vobiz CallInitiated (From field)
+#   - Vobiz Hangup (From field)
+phone_store:  dict[str, dict] = {}    # "+919148227303" → call data + transcript lines
+
+# Secondary indexes for any other lookup attempts
+call_store:   dict[str, dict] = {}    # call_uuid → call data (from CallInitiated)
+sip_to_phone: dict[str, str]  = {}    # sip_call_id → phone_number
+room_to_phone: dict[str, str] = {}    # room_name → phone_number
 
 # ---------------------------------------------------------------------------
 # App
@@ -109,23 +114,34 @@ async def vobiz_webhook(request: Request):
 def _handle_call_initiated(body: dict):
     call_uuid   = body.get("CallUUID", "")
     sip_call_id = body.get("SIPCallID", "")
+    phone       = body.get("From", "")
     allowed     = body.get("Allowed", True)
 
-    call_store[call_uuid] = {
-        "call_uuid":   call_uuid,
-        "sip_call_id": sip_call_id,
-        "from":        body.get("From", ""),
-        "to":          body.get("To", ""),
-        "direction":   body.get("Direction", ""),
+    record = {
+        "call_uuid":    call_uuid,
+        "sip_call_id":  sip_call_id,
+        "from":         phone,
+        "to":           body.get("To", ""),
+        "direction":    body.get("Direction", ""),
         "initiated_at": body.get("Timestamp", ""),
-        "allowed":     allowed,
-        "reason":      body.get("Reason", ""),
-        "lines":       [],
-        "room_name":   None,
+        "allowed":      allowed,
+        "reason":       body.get("Reason", ""),
+        "lines":        [],
+        "room_name":    None,
     }
 
-    if sip_call_id:
-        sip_to_uuid[sip_call_id] = call_uuid
+    # Store by phone (primary) AND call_uuid (secondary)
+    if phone:
+        phone_store.setdefault(phone, record)
+        phone_store[phone]["call_uuid"]   = call_uuid
+        phone_store[phone]["sip_call_id"] = sip_call_id
+    call_store[call_uuid] = record
+
+    if sip_call_id and phone:
+        sip_to_phone[sip_call_id] = phone
+
+    logger.info("CallInitiated: phone=%s uuid=%s sip=%s allowed=%s",
+                phone, call_uuid, sip_call_id, allowed)
 
     if not allowed:
         logger.warning("Call REJECTED: %s — %s", call_uuid, body.get("Reason"))
@@ -150,19 +166,48 @@ async def _run_analysis_pipeline(hangup: dict):
 
     logger.info("Pipeline started: CallUUID=%s duration=%ds", call_uuid, duration)
 
-    # 1. Fetch transcript from store
-    record      = call_store.get(call_uuid, {})
-    sip_id      = record.get("sip_call_id") or sip_call_id
-    transcript  = record.get("lines", [])
+    # ── Transcript lookup ──────────────────────────────────────────────────
+    # Match priority:
+    #   1. Phone number (From field) — most reliable, same in all events
+    #   2. SIPCallID — same in CallInitiated + Hangup from Vobiz
+    #   3. Fallback — most recently active call with lines
 
+    transcript: list = []
+
+    # 1. Phone number match (primary)
+    phone_record = phone_store.get(from_num)
+    if phone_record:
+        transcript = phone_record.get("lines", [])
+        if transcript:
+            logger.info("Transcript found via phone match (%s): %d lines", from_num, len(transcript))
+
+    # 2. SIPCallID match
+    if not transcript and sip_call_id:
+        matched_phone = sip_to_phone.get(sip_call_id)
+        if matched_phone:
+            transcript = phone_store.get(matched_phone, {}).get("lines", [])
+            if transcript:
+                logger.info("Transcript found via SIPCallID (%s): %d lines", sip_call_id, len(transcript))
+
+    # 3. Room name contains phone digits
     if not transcript:
-        # Try matching by sip_call_id
-        matched_uuid = sip_to_uuid.get(sip_id)
-        if matched_uuid and matched_uuid != call_uuid:
-            transcript = call_store.get(matched_uuid, {}).get("lines", [])
-            logger.info("Found transcript via sip_call_id match: %d lines", len(transcript))
+        from_digits = from_num.replace("+", "").replace("-", "")[-10:]
+        for room, phone in room_to_phone.items():
+            if from_digits in room.replace("-", ""):
+                transcript = phone_store.get(phone, {}).get("lines", [])
+                if transcript:
+                    logger.info("Transcript found via room name match: %d lines", len(transcript))
+                    break
 
-    logger.info("Transcript lines: %d", len(transcript))
+    # 4. Last resort — most recently active call
+    if not transcript:
+        candidates = [(p, r) for p, r in phone_store.items() if r.get("lines")]
+        if candidates:
+            best_phone, best_rec = max(candidates, key=lambda x: len(x[1]["lines"]))
+            transcript = best_rec["lines"]
+            logger.info("Transcript found via fallback (phone=%s): %d lines", best_phone, len(transcript))
+
+    logger.info("Final transcript: %d lines for call %s", len(transcript), call_uuid)
 
     # 2. Fetch recording from Vobiz
     mp3_path = None
@@ -350,9 +395,12 @@ def _print_report(report: dict, saved_path: str):
     scores = ta.get("quality_scores", {})
 
     verdict_icon = {"PASS": "✅", "REVIEW": "🟡", "FAIL": "❌"}.get(gate["verdict"], "❓")
-    mos_icon     = "✅" if (audio.get("mos") or 0) >= 3.5 else "⚠️" if (audio.get("mos") or 0) >= 2.0 else "❌"
-    jitter_icon  = "✅" if (audio.get("jitter_ms") or 0) <= 50 else "⚠️"
-    silence_icon = "✅" if audio.get("silence_pct", 0) <= 30 else "⚠️" if audio.get("silence_pct", 0) <= 60 else "❌"
+    mos_val      = audio.get("mos") or 0
+    jitter_val   = audio.get("jitter_ms") or 0
+    silence_val  = audio.get("silence_pct") or 0
+    mos_icon     = "✅" if mos_val >= 3.5 else "⚠️" if mos_val >= 2.0 else ("N/A" if mos_val == 0 else "❌")
+    jitter_icon  = "✅" if jitter_val <= 50 else "⚠️" if jitter_val > 0 else "N/A"
+    silence_icon = "✅" if silence_val <= 30 else "⚠️" if silence_val <= 60 else "❌"
     res_icon     = "✅" if ta.get("call_resolution") == "RESOLVED" else "⚠️"
 
     dur = meta.get("duration_seconds") or 0
@@ -461,6 +509,7 @@ class TranscriptLinePayload(BaseModel):
     call_uuid:   str = ""
     sip_call_id: str = ""
     room_name:   str = ""
+    phone:       str = ""   # phone number — primary key
     speaker:     str = "caller"
     text:        str = ""
     timestamp:   str = ""
@@ -469,51 +518,62 @@ class TranscriptLinePayload(BaseModel):
 @app.post("/internal/transcript", include_in_schema=False)
 async def internal_transcript(body: TranscriptLinePayload):
     """Agent worker POSTs each spoken line here in real-time."""
-    # Resolve call_uuid from any available identifier
-    call_uuid = body.call_uuid
+    # Extract phone from room_name if not provided
+    # Room name format: post-call-analysis-919148227303-7631
+    phone = body.phone
+    if not phone and body.room_name:
+        parts = body.room_name.replace("-", " ").split()
+        for part in parts:
+            if len(part) >= 10 and part.isdigit():
+                phone = "+" + part
+                break
 
-    if not call_uuid and body.sip_call_id:
-        call_uuid = sip_to_uuid.get(body.sip_call_id, "")
+    # Store transcript line keyed by phone (primary key)
+    if phone:
+        rec = phone_store.setdefault(phone, {
+            "lines": [], "sip_call_id": body.sip_call_id, "room_name": body.room_name
+        })
+        rec["lines"].append({
+            "speaker":   body.speaker,
+            "text":      body.text,
+            "timestamp": body.timestamp or datetime.now(timezone.utc).isoformat(),
+        })
+        if body.sip_call_id:
+            sip_to_phone[body.sip_call_id] = phone
+        if body.room_name:
+            room_to_phone[body.room_name] = phone
 
-    if not call_uuid and body.room_name:
-        call_uuid = room_to_uuid.get(body.room_name, "")
-
-    if not call_uuid:
-        # Create an entry if we haven't received CallInitiated yet
-        call_uuid = body.sip_call_id or body.room_name or "unknown"
-        call_store.setdefault(call_uuid, {"lines": [], "sip_call_id": body.sip_call_id})
-
-    call_store.setdefault(call_uuid, {"lines": [], "sip_call_id": body.sip_call_id})
-    call_store[call_uuid]["lines"].append({
-        "speaker":   body.speaker,
-        "text":      body.text,
-        "timestamp": body.timestamp or datetime.now(timezone.utc).isoformat(),
-    })
-
+    # Also store in call_store by room_name as fallback
     if body.room_name:
-        room_to_uuid[body.room_name] = call_uuid
-    if body.sip_call_id:
-        sip_to_uuid[body.sip_call_id] = call_uuid
+        room_rec = call_store.setdefault(body.room_name, {"lines": [], "phone": phone})
+        room_rec["lines"].append({
+            "speaker":   body.speaker,
+            "text":      body.text,
+            "timestamp": body.timestamp or datetime.now(timezone.utc).isoformat(),
+        })
 
     return {"ok": True}
 
 
 @app.post("/internal/room_mapping", include_in_schema=False)
 async def internal_room_mapping(request: Request):
-    """Agent registers room_name → sip_call_id mapping when participant joins."""
-    body = await request.json()
+    """Agent registers room_name → phone + sip_call_id when participant joins."""
+    body        = await request.json()
     room_name   = body.get("room_name", "")
     sip_call_id = body.get("sip_call_id", "")
     phone       = body.get("phone", "")
 
-    if room_name and sip_call_id:
-        sip_to_uuid.setdefault(sip_call_id, room_name)
-        call_store.setdefault(room_name, {
-            "lines": [], "sip_call_id": sip_call_id, "phone": phone
-        })
-        call_store[room_name]["sip_call_id"] = sip_call_id
-        logger.info("Room mapped: %s → SIP %s", room_name, sip_call_id)
+    if phone:
+        rec = phone_store.setdefault(phone, {"lines": [], "sip_call_id": sip_call_id, "room_name": room_name})
+        rec["sip_call_id"] = sip_call_id
+        rec["room_name"]   = room_name
 
+    if sip_call_id and phone:
+        sip_to_phone[sip_call_id] = phone
+    if room_name and phone:
+        room_to_phone[room_name] = phone
+
+    logger.info("Room mapped: %s | phone=%s | SIP=%s", room_name, phone, sip_call_id)
     return {"ok": True}
 
 
