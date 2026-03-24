@@ -23,7 +23,10 @@ load_dotenv(".env")
 logger = logging.getLogger("post-call.gemini")
 
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
-GEMINI_KEY   = os.getenv("GEMINI_API_KEY", "")
+# Support both key names
+GEMINI_KEY   = (os.getenv("GEMINI_API_KEY")
+                or os.getenv("GOOGLE_GENERATIVE_AI_API_KEY")
+                or "")
 
 _client: Optional[genai.Client] = None
 
