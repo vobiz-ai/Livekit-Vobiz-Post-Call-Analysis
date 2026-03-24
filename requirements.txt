@@ -1,0 +1,24 @@
+# FastAPI server
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+
+# Gemini AI (post-call analysis)
+google-genai>=1.47.0
+
+# Audio analysis
+pydub>=0.25.1
+
+# HTTP client (recording download, Vobiz API)
+aiohttp>=3.9.0
+
+# LiveKit Agent
+livekit-agents>=1.5.0
+livekit-api>=1.1.0
+livekit-plugins-openai>=1.5.0
+livekit-plugins-deepgram>=1.5.0
+livekit-plugins-silero>=1.5.0
+livekit-plugins-noise-cancellation
+
+# Config + data
+python-dotenv>=1.0.0
+pydantic>=2.0.0
