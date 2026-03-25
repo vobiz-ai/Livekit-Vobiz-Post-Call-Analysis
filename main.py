@@ -408,7 +408,7 @@ def _print_report(report: dict, saved_path: str):
 
     w = 56
     line  = "═" * w
-    hline = "─" * w
+    hline = "─" * (w - 4)
 
     def row(label, value): print(f"║  {label:<16} {str(value):<{w-20}}║")
 
@@ -425,11 +425,14 @@ def _print_report(report: dict, saved_path: str):
         row("Flags",  ", ".join(gate["flags"]))
 
     print(f"╠{line}╣")
-    print(f"║  {'AUDIO QUALITY':<{w-4}}║")
-    print(f"║  {hline}  ║")
-    row("MOS Score",  f"{audio.get('mos','N/A')} / 5.0  {mos_icon}")
-    row("Jitter",     f"{audio.get('jitter_ms','N/A')}ms  {jitter_icon}")
-    row("Silence",    f"{audio.get('silence_pct','N/A')}%  {silence_icon}")
+    print(f"║  {'AUDIO QUALITY (from Vobiz CDR)':<{w-4}}║")
+    print(f"║  {hline:<{w-4}}║")
+    mos_str     = f"{audio.get('mos')} / 5.0  {mos_icon}" if audio.get('mos') else "N/A (no recording)"
+    jitter_str  = f"{audio.get('jitter_ms')}ms  {jitter_icon}" if audio.get('jitter_ms') is not None else "N/A"
+    silence_str = f"{audio.get('silence_pct')}%  {silence_icon}" if audio.get('silence_pct') is not None else "N/A (no recording)"
+    row("MOS Score",  mos_str)
+    row("Jitter",     jitter_str)
+    row("Silence",    silence_str)
     row("Ring Time",  f"{meta.get('ring_time','?')}s")
     if audio.get("silence_gaps"):
         gaps_str = f"{len(audio['silence_gaps'])} gap(s)"
@@ -443,7 +446,7 @@ def _print_report(report: dict, saved_path: str):
 
     print(f"╠{line}╣")
     print(f"║  {'GEMINI 2.0 FLASH ANALYSIS':<{w-4}}║")
-    print(f"║  {hline}  ║")
+    print(f"║  {hline:<{w-4}}║")
 
     # Summary — wrap at 50 chars
     summary = ta.get("summary", "")
@@ -461,26 +464,26 @@ def _print_report(report: dict, saved_path: str):
     if chunk.strip():
         row("" if not first_line else "Summary", chunk.strip())
 
-    print(f"║  {hline}  ║")
+    print(f"║  {hline:<{w-4}}║")
     row("Intent",     ta.get("caller_intent", "")[:46])
     row("Resolution", f"{res_icon} {ta.get('call_resolution','?')}")
     row("Sentiment",  ta.get("caller_sentiment", "")[:46])
     row("Topics",     ", ".join(ta.get("topics_covered", []))[:46])
 
     if ta.get("action_items"):
-        print(f"║  {hline}  ║")
+        print(f"║  {hline:<{w-4}}║")
         print(f"║  {'ACTION ITEMS':<{w-4}}║")
         for item in ta["action_items"][:4]:
             print(f"║    • {str(item)[:w-8]:<{w-8}}║")
 
     if ta.get("unanswered_questions"):
-        print(f"║  {hline}  ║")
+        print(f"║  {hline:<{w-4}}║")
         print(f"║  {'UNANSWERED QUESTIONS':<{w-4}}║")
         for q in ta["unanswered_questions"][:3]:
             print(f"║    • {str(q)[:w-8]:<{w-8}}║")
 
     if ta.get("confusion_signals"):
-        print(f"║  {hline}  ║")
+        print(f"║  {hline:<{w-4}}║")
         print(f"║  {'CONFUSION SIGNALS':<{w-4}}║")
         for s in ta["confusion_signals"][:3]:
             print(f"║    • {str(s)[:w-8]:<{w-8}}║")
