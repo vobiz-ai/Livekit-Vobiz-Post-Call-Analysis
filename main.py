@@ -482,6 +482,12 @@ def _print_report(report: dict, saved_path: str):
         for q in ta["unanswered_questions"][:3]:
             print(f"║    • {str(q)[:w-8]:<{w-8}}║")
 
+    if ta.get("scam_indicators"):
+        print(f"║  {hline:<{w-4}}║")
+        print(f"║  {'⚠️  SCAM INDICATORS DETECTED':<{w-4}}║")
+        for s in ta["scam_indicators"][:5]:
+            print(f"║    🚨 {str(s)[:w-9]:<{w-9}}║")
+
     if ta.get("confusion_signals"):
         print(f"║  {hline:<{w-4}}║")
         print(f"║  {'CONFUSION SIGNALS':<{w-4}}║")
@@ -495,6 +501,12 @@ def _print_report(report: dict, saved_path: str):
                   f"Resolution:{scores.get('resolution','?')}  "
                   f"Empathy:{scores.get('empathy','?')}")
     print(f"║  {score_line:<{w-4}}║")
+    conf = ta.get("analysis_confidence")
+    if conf is not None:
+        conf_icon = "✅" if conf >= 70 else "⚠️" if conf >= 40 else "❌"
+        print(f"║  {'Confidence: ' + str(conf) + '/100  ' + conf_icon:<{w-4}}║")
+    if ta.get("language_detected"):
+        print(f"║  {'Language: ' + ta['language_detected']:<{w-4}}║")
 
     print(f"╠{line}╣")
     print(f"║  {'Gate reason: ' + gate.get('reason','')[:w-18]:<{w-4}}║")
