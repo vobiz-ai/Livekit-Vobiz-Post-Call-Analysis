@@ -69,7 +69,7 @@ RECORDING_RETRY_DELAY_SECS = int(os.getenv("RECORDING_RETRY_DELAY_SECS", "5"))
 #   - agent.py (room name contains phone)
 #   - Vobiz CallInitiated (From field)
 #   - Vobiz Hangup (From field)
-phone_store:  dict[str, dict] = {}    # "+919148227303" → call data + transcript lines
+phone_store:  dict[str, dict] = {}    # "+15550003333" → call data + transcript lines
 
 # Secondary indexes for any other lookup attempts
 call_store:   dict[str, dict] = {}    # call_uuid → call data (from CallInitiated)
@@ -534,7 +534,7 @@ class TranscriptLinePayload(BaseModel):
 async def internal_transcript(body: TranscriptLinePayload):
     """Agent worker POSTs each spoken line here in real-time."""
     # Extract phone from room_name if not provided
-    # Room name format: post-call-analysis-919148227303-7631
+    # Room name format: post-call-analysis-15550003333-7631
     phone = body.phone
     if not phone and body.room_name:
         parts = body.room_name.replace("-", " ").split()

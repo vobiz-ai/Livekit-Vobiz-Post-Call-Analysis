@@ -1,7 +1,7 @@
 """
 make_call.py — Dispatch an outbound call to the post-call analysis agent
 Usage:
-    python make_call.py --to +91XXXXXXXXXX
+    python make_call.py --to +15550003333
 """
 import argparse
 import asyncio
@@ -19,12 +19,12 @@ AGENT_NAME = "post-call-analysis"
 
 async def main():
     parser = argparse.ArgumentParser(description="Place a call via post-call-analysis agent")
-    parser.add_argument("--to", required=True, help="E.164 phone number e.g. +919148227303")
+    parser.add_argument("--to", required=True, help="E.164 phone number e.g. +15550003333")
     args = parser.parse_args()
 
     phone = args.to.strip()
     if not phone.startswith("+"):
-        print("ERROR: Phone number must be in E.164 format (+91...)")
+        print("ERROR: Phone number must be in E.164 format, e.g. +15550003333")
         return
 
     url        = os.getenv("LIVEKIT_URL")
